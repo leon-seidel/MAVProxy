@@ -8,7 +8,7 @@
 
 from pymavlink import mavutil
 import time, struct, math, sys, fnmatch, traceback, json, os
-
+from pathlib import Path  # Added (Leon)
 from MAVProxy.modules.lib import mp_module
 from MAVProxy.modules.lib import mp_util
 
@@ -16,12 +16,13 @@ if mp_util.has_wxpython:
     from MAVProxy.modules.lib.mp_menu import *
     from MAVProxy.modules.lib.wx_addlink import MPMenulinkAddDialog
 
-dataPackets = frozenset(['BAD_DATA','LOG_DATA'])
-delayedPackets = frozenset([ 'MISSION_CURRENT', 'SYS_STATUS', 'VFR_HUD',
-                  'GPS_RAW_INT', 'SCALED_PRESSURE', 'GLOBAL_POSITION_INT',
-                  'NAV_CONTROLLER_OUTPUT' ])
-activityPackets = frozenset([ 'HEARTBEAT', 'GPS_RAW_INT', 'GPS_RAW', 'GLOBAL_POSITION_INT', 'SYS_STATUS', 'HIGH_LATENCY2' ])
-radioStatusPackets = frozenset([ 'RADIO', 'RADIO_STATUS'])
+dataPackets = frozenset(['BAD_DATA', 'LOG_DATA'])
+delayedPackets = frozenset(['MISSION_CURRENT', 'SYS_STATUS', 'VFR_HUD',
+                            'GPS_RAW_INT', 'SCALED_PRESSURE', 'GLOBAL_POSITION_INT',
+                            'NAV_CONTROLLER_OUTPUT'])
+activityPackets = frozenset(
+    ['HEARTBEAT', 'GPS_RAW_INT', 'GPS_RAW', 'GLOBAL_POSITION_INT', 'SYS_STATUS', 'HIGH_LATENCY2'])
+radioStatusPackets = frozenset(['RADIO', 'RADIO_STATUS'])
 
 preferred_ports = [
     '*FTDI*',
@@ -36,7 +37,9 @@ preferred_ports = [
     '*FMU*',
     '*Swift-Flyer*',
     '*Serial*',
+    '*CubePilot*',
 ]
+
 
 class LinkModule(mp_module.MPModule):
 
@@ -70,25 +73,26 @@ class LinkModule(mp_module.MPModule):
         if mp_util.has_wxpython:
             self.menu_rm = MPMenuSubMenu('Remove', items=[])
             self.menu = MPMenuSubMenu('Link',
-                                      items=[MPMenuItem('Add...', 'Add...', '# link add ', handler=MPMenulinkAddDialog()),
-                                             self.menu_rm,
-                                             MPMenuItem('Ports', 'Ports', '# link ports'),
-                                             MPMenuItem('List', 'List', '# link list'),
-                                             MPMenuItem('Status', 'Status', '# link')])
+                                      items=[
+                                          MPMenuItem('Add...', 'Add...', '# link add ', handler=MPMenulinkAddDialog()),
+                                          self.menu_rm,
+                                          MPMenuItem('Ports', 'Ports', '# link ports'),
+                                          MPMenuItem('List', 'List', '# link list'),
+                                          MPMenuItem('Status', 'Status', '# link')])
             self.last_menu_update = 0
 
     def idle_task(self):
         '''called on idle'''
-        if mp_util.has_wxpython: 
+        if mp_util.has_wxpython:
             if self.module('console') is not None:
                 if not self.menu_added_console:
                     self.menu_added_console = True
                     # we don't dynamically update these yet due to a wx bug
-                    self.menu_rm.items = [ MPMenuItem(p, p, '# link remove %s' % p) for p in self.complete_links('') ]
+                    self.menu_rm.items = [MPMenuItem(p, p, '# link remove %s' % p) for p in self.complete_links('')]
                     self.module('console').add_menu(self.menu)
             else:
                 self.menu_added_console = False
-            
+
         for m in self.mpstate.mav_master:
             m.source_system = self.settings.source_system
             m.mav.srcSystem = m.source_system
@@ -102,35 +106,39 @@ class LinkModule(mp_module.MPModule):
                     self.emit_accumulated_statustext(src, msgid, pending)
         # datarate logging if enabled, at 1 Hz
         if self.datarate_logging_timer.trigger() and self.datarate_logging:
-            with open(self.datarate_logging, 'a') as logfile:
+            with open(self.datarate_logging, 'w') as logfile:  # Changed to write w instead of append a
                 for master in self.mpstate.mav_master:
                     highest_msec_key = (self.target_system, self.target_component)
-                    linkdelay = (self.status.highest_msec.get(highest_msec_key, 0) - master.highest_msec.get(highest_msec_key, 0))*1.0e-3
-                    logfile.write(str(time.strftime("%H:%M:%S")) + "," + 
+                    linkdelay = (self.status.highest_msec.get(highest_msec_key, 0) - master.highest_msec.get(
+                        highest_msec_key, 0)) * 1.0e-3
+                    logfile.write(f"{time.time():.2f}," +  # Add Unix time (Leon)
+                                  str(time.strftime("%H:%M:%S")) + "," +
                                   str(self.link_label(master)) + "," +
                                   str(master.linknum) + "," +
                                   str(self.status.counters['MasterIn'][master.linknum]) + "," +
                                   str(self.status.bytecounters['MasterIn'][master.linknum].total()) + "," +
+                                  str(self.status.bytecounters['MasterIn'][
+                                          master.linknum].rate()) + "," +  # Changed to add rate (Leon)
                                   str(linkdelay) + "," +
                                   str(100 * round(master.packet_loss(), 3)) + "\n")
 
     def complete_serial_ports(self, text):
         '''return list of serial ports'''
         ports = mavutil.auto_detect_serial(preferred_list=preferred_ports)
-        return [ p.device for p in ports ]
+        return [p.device for p in ports]
 
     def complete_hl(self, text):
         '''return list of hl options'''
-        return [ 'on', 'off' ]
+        return ['on', 'off']
 
     def complete_dl(self, text):
         '''return list of datarate_logging options'''
-        return [ 'on', 'off' ]
+        return ['on', 'off']
 
     def complete_links(self, text):
         '''return list of links'''
         try:
-            ret = [ m.address for m in self.mpstate.mav_master ]
+            ret = [m.address for m in self.mpstate.mav_master]
             for m in self.mpstate.mav_master:
                 ret.append(m.address)
                 if hasattr(m, 'label'):
@@ -180,12 +188,15 @@ class LinkModule(mp_module.MPModule):
             print("Datarate logging is " + ("on" if self.datarate_logging else "off"))
             return
         elif args[0] == "on":
-            self.datarate_logging = os.path.join(self.logdir, "dataratelog.csv")
+            # Path("telem_tests").mkdir(parents=True, exist_ok=True)  # Added (Leon)
+            # self.datarate_logging = os.path.join(self.logdir, f"telem_tests/{time.strftime('%Y-%m-%d_%H-%M-%S')}_dataratelog.csv")    # Changed (Leon)
+            self.datarate_logging = os.path.join(self.logdir, "dataratelog.csv")  # Changed (Leon)
             print("Datarate Logging ON, logfile: " + self.datarate_logging)
             # Open a new file handle (don't append) for logging
             with open(self.datarate_logging, 'w') as logfile:
-                logfile.write("time, linkname, linkid, packetsreceived, bytesreceived, delaysec, lostpercent\n")
-        elif args[0] == "off": 
+                logfile.write(
+                    "unix_time, time, linkname, linkid, packetsreceived, bytesreceived, rate, delaysec, lostpercent\n")  # Changed (Leon) -> add current rate and unix time
+        elif args[0] == "off":
             print("Datarate Logging OFF")
             self.datarate_logging = None
         else:
@@ -196,47 +207,48 @@ class LinkModule(mp_module.MPModule):
         if len(args) < 1:
             print("High latency mode is " + str(self.high_latency))
             return
-        elif args[0] == "on": 
+        elif args[0] == "on":
             print("High latency mode ON")
             self.high_latency = True
             # Tell ArduPilot to start sending HIGH_LATENCY2 messages
             self.master.mav.command_long_send(
                 self.target_system,  # target_system
                 self.target_component,
-                mavutil.mavlink.MAV_CMD_CONTROL_HIGH_LATENCY, # command
-                0, # confirmation
-                1, # param1 (yes/no)
-                0, # param2
-                0, # param3
-                0, # param4
-                0, # param5
-                0, # param6
-                0) # param7
+                mavutil.mavlink.MAV_CMD_CONTROL_HIGH_LATENCY,  # command
+                0,  # confirmation
+                1,  # param1 (yes/no)
+                0,  # param2
+                0,  # param3
+                0,  # param4
+                0,  # param5
+                0,  # param6
+                0)  # param7
             return
-        elif args[0] == "off": 
+        elif args[0] == "off":
             print("High latency mode OFF")
             self.high_latency = False
             self.master.mav.command_long_send(
                 self.target_system,  # target_system
                 self.target_component,
-                mavutil.mavlink.MAV_CMD_CONTROL_HIGH_LATENCY, # command
-                0, # confirmation
-                0, # param1 (yes/no)
-                0, # param2
-                0, # param3
-                0, # param4
-                0, # param5
-                0, # param6
-                0) # param7
+                mavutil.mavlink.MAV_CMD_CONTROL_HIGH_LATENCY,  # command
+                0,  # confirmation
+                0,  # param1 (yes/no)
+                0,  # param2
+                0,  # param3
+                0,  # param4
+                0,  # param5
+                0,  # param6
+                0)  # param7
             return
         else:
             print("usage: hl <on|off>")
-                        
+
     def show_link(self):
         '''show link information'''
         for master in self.mpstate.mav_master:
             highest_msec_key = (self.target_system, self.target_component)
-            linkdelay = (self.status.highest_msec.get(highest_msec_key, 0) - master.highest_msec.get(highest_msec_key, 0))*1.0e-3
+            linkdelay = (self.status.highest_msec.get(highest_msec_key, 0) - master.highest_msec.get(highest_msec_key,
+                                                                                                     0)) * 1.0e-3
             if master.linkerror:
                 status = "DOWN"
             else:
@@ -249,20 +261,21 @@ class LinkModule(mp_module.MPModule):
                         # don't have a signing secret
                         sign_string = ", (no-signing-secret)"
                     else:
-                        sign_string = ", unsigned %u reject %u" % (master.mav.signing.unsigned_count, master.mav.signing.reject_count)
+                        sign_string = ", unsigned %u reject %u" % (
+                        master.mav.signing.unsigned_count, master.mav.signing.reject_count)
             except AttributeError as e:
                 # some mav objects may not have a "signing" attribute
                 pass
-            print("link %s %s (%u packets, %u bytes, %.2fs delay, %u lost, %.1f%% loss, rate:%uB/s%s)" % (self.link_label(master),
-                                                                                    status,
-                                                                                    self.status.counters['MasterIn'][master.linknum],
-                                                                                    self.status.bytecounters['MasterIn'][master.linknum].total(),
-                                                                                    linkdelay,
-                                                                                    master.mav_loss,
-                                                                                    master.packet_loss(),
-                                                                                    self.status.bytecounters['MasterIn'][master.linknum].rate(),
-                                                                                    sign_string))
-
+            print("link %s %s (%u packets, %u bytes, %.2fs delay, %u lost, %.1f%% loss, rate:%uB/s%s)" % (
+            self.link_label(master),
+            status,
+            self.status.counters['MasterIn'][master.linknum],
+            self.status.bytecounters['MasterIn'][master.linknum].total(),
+            linkdelay,
+            master.mav_loss,
+            master.packet_loss(),
+            self.status.bytecounters['MasterIn'][master.linknum].rate(),
+            sign_string))
 
     def reset_link_stats(self):
         '''reset link statistics'''
@@ -280,7 +293,7 @@ class LinkModule(mp_module.MPModule):
             self.cmd_vehicle([str(v)])
             self.mpstate.functions.process_stdin(' '.join(args), True)
         self.cmd_vehicle([str(saved_target)])
-        
+
     def cmd_link_list(self):
         '''list links'''
         print("%u links" % len(self.mpstate.mav_master))
@@ -402,8 +415,8 @@ class LinkModule(mp_module.MPModule):
         for i in range(len(self.mpstate.mav_master)):
             conn = self.mpstate.mav_master[i]
             if (str(i) == device or
-                conn.address == device or
-                getattr(conn, 'label', None) == device):
+                    conn.address == device or
+                    getattr(conn, 'label', None) == device):
                 return i
         return None
 
@@ -449,13 +462,13 @@ class LinkModule(mp_module.MPModule):
         if self.status.watch is not None:
             for msg_type in self.status.watch:
                 if fnmatch.fnmatch(m.get_type().upper(), msg_type.upper()):
-                    self.mpstate.console.writeln('> '+ str(m))
+                    self.mpstate.console.writeln('> ' + str(m))
                     break
 
         mtype = m.get_type()
         if mtype != 'BAD_DATA' and self.mpstate.logqueue:
             usec = self.get_usec()
-            usec = (usec & ~3) | 3 # linknum 3
+            usec = (usec & ~3) | 3  # linknum 3
             self.mpstate.logqueue.put(bytearray(struct.pack('>Q', usec) + m.get_msgbuf()))
 
     def handle_msec_timestamp(self, m, master):
@@ -470,7 +483,7 @@ class LinkModule(mp_module.MPModule):
             return
         sysid = m.get_srcSystem()
         compid = m.get_srcComponent()
-        highest_msec_key = (sysid,compid)
+        highest_msec_key = (sysid, compid)
         highest = master.highest_msec.get(highest_msec_key, 0)
         if msec + 30000 < highest:
             self.say('Time has wrapped')
@@ -485,7 +498,8 @@ class LinkModule(mp_module.MPModule):
         master.highest_msec[highest_msec_key] = msec
         if msec > self.status.highest_msec.get(highest_msec_key, 0):
             self.status.highest_msec[highest_msec_key] = msec
-        if msec < self.status.highest_msec.get(highest_msec_key, 0) and len(self.mpstate.mav_master) > 1 and self.mpstate.settings.checkdelay:
+        if msec < self.status.highest_msec.get(highest_msec_key, 0) and len(
+                self.mpstate.mav_master) > 1 and self.mpstate.settings.checkdelay:
             master.link_delayed = True
         else:
             master.link_delayed = False
@@ -511,26 +525,26 @@ class LinkModule(mp_module.MPModule):
     def report_altitude(self, altitude):
         '''possibly report a new altitude'''
         master = self.master
-        if getattr(self.console, 'ElevationMap', None) is not None and self.mpstate.settings.basealt != 0:
-            lat = master.field('GLOBAL_POSITION_INT', 'lat', 0)*1.0e-7
-            lon = master.field('GLOBAL_POSITION_INT', 'lon', 0)*1.0e-7
-            alt1 = self.console.ElevationMap.GetElevation(lat, lon)
+        if len(self.module_matching('terrain')) > 0 and self.mpstate.settings.basealt != 0:
+            lat = master.field('GLOBAL_POSITION_INT', 'lat', 0) * 1.0e-7
+            lon = master.field('GLOBAL_POSITION_INT', 'lon', 0) * 1.0e-7
+            alt1 = self.module('terrain').ElevationModel.GetElevation(lat, lon)
             if alt1 is not None:
                 alt2 = self.mpstate.settings.basealt
                 altitude += alt2 - alt1
         self.status.altitude = altitude
         altitude_converted = self.height_convert_units(altitude)
         if (int(self.mpstate.settings.altreadout) > 0 and
-            math.fabs(altitude_converted - self.last_altitude_announce) >=
-            int(self.settings.altreadout)):
+                math.fabs(altitude_converted - self.last_altitude_announce) >=
+                int(self.settings.altreadout)):
             self.last_altitude_announce = altitude_converted
-            rounded_alt = int(self.settings.altreadout) * ((self.settings.altreadout/2 + int(altitude_converted)) / int(self.settings.altreadout))
+            rounded_alt = int(self.settings.altreadout) * (
+                        (self.settings.altreadout / 2 + int(altitude_converted)) / int(self.settings.altreadout))
             self.say("height %u" % rounded_alt, priority='notification')
-
 
     def emit_accumulated_statustext(self, key, id, pending):
         out = pending.accumulated_statustext()
-        if out != self.status.last_apm_msg or time.time() > self.status.last_apm_msg_time+2:
+        if out != self.status.last_apm_msg or time.time() > self.status.last_apm_msg_time + 2:
             (fg, bg) = self.colors_for_severity(pending.severity)
             out = pending.accumulated_statustext()
             self.mpstate.console.writeln("AP: %s" % out, bg=bg, fg=fg)
@@ -558,15 +572,22 @@ class LinkModule(mp_module.MPModule):
             # keep the pymavlink level target component aligned with the MAVProxy setting
             print("change target_component %u" % self.settings.target_component)
             master.target_component = self.settings.target_component
-            
+
         mtype = m.get_type()
 
         if (mtype == 'HEARTBEAT' or mtype == 'HIGH_LATENCY2') and m.type != mavutil.mavlink.MAV_TYPE_GCS:
             if self.settings.target_system == 0 and self.settings.target_system != m.get_srcSystem():
                 self.settings.target_system = m.get_srcSystem()
-                self.say("online system %u" % self.settings.target_system,'message')
+                self.say("online system %u" % self.settings.target_system, 'message')
                 for mav in self.mpstate.mav_master:
                     mav.target_system = self.settings.target_system
+
+            if m.get_srcComponent() in [mavutil.mavlink.MAV_COMP_ID_ADSB,
+                                        mavutil.mavlink.MAV_COMP_ID_ODID_TXRX_1,
+                                        mavutil.mavlink.MAV_COMP_ID_ODID_TXRX_2,
+                                        mavutil.mavlink.MAV_COMP_ID_ODID_TXRX_3]:
+                # ignore these
+                return
 
             if self.status.heartbeat_error:
                 self.status.heartbeat_error = False
@@ -591,9 +612,9 @@ class LinkModule(mp_module.MPModule):
                     self.set_prompt(self.status.flightmode + "> ")
 
             if master.flightmode != self.status.last_mode_announced and time.time() > self.status.last_mode_announce + 2:
-                    self.status.last_mode_announce = time.time()
-                    self.status.last_mode_announced = master.flightmode
-                    self.say("Mode " + self.status.flightmode)
+                self.status.last_mode_announce = time.time()
+                self.status.last_mode_announced = master.flightmode
+                self.say("Mode " + self.status.flightmode)
 
             if m.type == mavutil.mavlink.MAV_TYPE_FIXED_WING:
                 self.mpstate.vehicle_type = 'plane'
@@ -631,7 +652,7 @@ class LinkModule(mp_module.MPModule):
                     self.start_time = time.time()
                     self.last_chunk_time = time.time()
 
-                def add_chunk(self, m): # m is a statustext message
+                def add_chunk(self, m):  # m is a statustext message
                     self.severity = m.severity
                     self.last_chunk_time = time.time()
                     if hasattr(m, 'chunk_seq'):
@@ -716,14 +737,14 @@ class LinkModule(mp_module.MPModule):
                     self.status.last_gps_lock = time.time()
 
         elif mtype == "NAV_CONTROLLER_OUTPUT" and self.status.flightmode == "AUTO" and self.mpstate.settings.distreadout:
-            rounded_dist = int(m.wp_dist/self.mpstate.settings.distreadout)*self.mpstate.settings.distreadout
+            rounded_dist = int(m.wp_dist / self.mpstate.settings.distreadout) * self.mpstate.settings.distreadout
             if math.fabs(rounded_dist - self.status.last_distance_announce) >= self.mpstate.settings.distreadout:
                 if rounded_dist != 0:
                     self.say("%u" % rounded_dist, priority="progress")
             self.status.last_distance_announce = rounded_dist
 
         elif mtype == "GLOBAL_POSITION_INT":
-            self.report_altitude(m.relative_alt*0.001)
+            self.report_altitude(m.relative_alt * 0.001)
 
         elif mtype == "COMPASSMOT_STATUS":
             print(m)
@@ -745,7 +766,8 @@ class LinkModule(mp_module.MPModule):
                 res = mavutil.mavlink.enums["MAV_RESULT"][m.result].name
                 res = res[11:]
                 if (m.target_component not in [mavutil.mavlink.MAV_COMP_ID_MAVCAN] and
-                    m.command not in [mavutil.mavlink.MAV_CMD_GET_HOME_POSITION]):
+                        m.command not in [mavutil.mavlink.MAV_CMD_GET_HOME_POSITION,
+                                          mavutil.mavlink.MAV_CMD_DO_DIGICAM_CONTROL]):
                     self.mpstate.console.writeln("Got COMMAND_ACK: %s: %s" % (cmd, res))
             except Exception:
                 self.mpstate.console.writeln("Got MAVLink msg: %s" % m)
@@ -771,13 +793,13 @@ class LinkModule(mp_module.MPModule):
             except Exception as e:
                 self.mpstate.console.writeln("Got MAVLink msg: %s" % m)
         else:
-            #self.mpstate.console.writeln("Got MAVLink msg: %s" % m)
+            # self.mpstate.console.writeln("Got MAVLink msg: %s" % m)
             pass
 
         if self.status.watch is not None:
             for msg_type in self.status.watch:
                 if fnmatch.fnmatch(mtype.upper(), msg_type.upper()):
-                    self.mpstate.console.writeln('< '+ str(m))
+                    self.mpstate.console.writeln('< ' + str(m))
                     break
 
     def mavlink_packet(self, msg):
@@ -844,7 +866,7 @@ class LinkModule(mp_module.MPModule):
                 if mtype_instance not in self.status.msg_count:
                     self.status.msg_count[mtype_instance] = 0
                 self.status.msg_count[mtype_instance] += 1
-        
+
         if m.get_srcComponent() == mavutil.mavlink.MAV_COMP_ID_GIMBAL and mtype == 'HEARTBEAT':
             # silence gimbal heartbeat packets for now
             return
@@ -881,14 +903,14 @@ class LinkModule(mp_module.MPModule):
             target_sysid = self.target_system
 
             # pass to modules
-            for (mod,pm) in self.mpstate.modules:
+            for (mod, pm) in self.mpstate.modules:
                 if not hasattr(mod, 'mavlink_packet'):
                     continue
                 # sysid 51/'3' is used by SiK radio for the injected RADIO/RADIO_STATUS mavlink frames.
                 # In order to be able to pass these to e.g. the graph module, which is not multi-vehicle,
-                # special handling is needed, so that the module gets both RADIO_STATUS and (single) target 
+                # special handling is needed, so that the module gets both RADIO_STATUS and (single) target
                 # vehicle information.
-                if not(sysid == 51 and mtype in radioStatusPackets):
+                if not (sysid == 51 and mtype in radioStatusPackets):
                     if not mod.multi_vehicle and sysid != target_sysid:
                         # only pass packets not from our target to modules that
                         # have marked themselves as being multi-vehicle capable
@@ -926,9 +948,10 @@ class LinkModule(mp_module.MPModule):
                 if stamp > best_timestamp:
                     best_link = i
                     best_timestamp = stamp
-            m.link_delayed = False                    
+            m.link_delayed = False
         self.mpstate.settings.link = best_link + 1
-        print("Set vehicle %s (link %u)" % (args[0], best_link+1))
+        print("Set vehicle %s (link %u)" % (args[0], best_link + 1))
+
 
 def init(mpstate):
     '''initialise module'''
