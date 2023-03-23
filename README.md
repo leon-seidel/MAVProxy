@@ -2,6 +2,8 @@
 
 MAVProxy
 
+Modified module mavproxy_link.py that writes connection info to a csv file readable by a link monitoring app.
+
 This is a MAVLink ground station written in python. 
 
 Please see https://ardupilot.org/mavproxy/index.html for more information
